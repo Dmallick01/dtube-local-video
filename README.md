@@ -1,6 +1,17 @@
 # DTube — Local Video Explorer
 
-A sleek, local-first video browser with glassmorphism UI. Drop a folder of videos and browse, sort, filter, and play — entirely in the browser. No upload, no cloud.
+**One line:** Fast, offline video library — scan folders locally, preview on hover, search and sort, play with keyboard shortcuts. No upload, no cloud.
+
+## Flow
+
+```mermaid
+flowchart TB
+  F[Folder drop / picker] --> S[Recursive scan]
+  S --> T[Parallel thumbnails]
+  T --> G[Gallery grid]
+  G --> P[Player overlay]
+  P --> G
+```
 
 ## Demo
 
@@ -10,31 +21,31 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 and drag a folder of video files onto the window.
+Open http://localhost:5173 → drag a folder or **Choose folder**.
 
 ## Features
 
-- Drag-and-drop folder scanning (File System Access API)
-- Thumbnail generation via canvas
-- Sort by name, date, size · filter by extension
-- Full-screen video player with keyboard controls
-- Anti-gravity glassmorphism design
+- File System Access API + `<input webkitdirectory>` fallback
+- **Parallel** thumbnail extraction (configurable concurrency)
+- Search, sort, extension filter, grid density
+- Hover preview for mp4/webm/mov
+- Player: speed, zoom, volume, playlist prev/next, keyboard shortcuts
+- Optional `server/` proxy for non-browser environments
 
-## Optional server
+## Keyboard shortcuts (player)
 
-For environments that need a filesystem proxy:
-
-```bash
-cd server
-npm install
-node server.js
-```
+| Key | Action |
+|-----|--------|
+| Space | Play / pause |
+| ← / → | Seek ±5s |
+| Shift+← / → | Previous / next file |
+| F | Fullscreen |
+| Esc | Close player |
 
 ## Deploy
 
 ```bash
-cd frontend
-npm run build
+cd frontend && npm run build
 # Deploy dist/ to GitHub Pages or Vercel
 ```
 
@@ -42,13 +53,23 @@ npm run build
 
 ```
 dtube-local-video/
-├── frontend/     # Vite + React app
-└── server/       # Optional Node.js file server
+├── frontend/     # Vite + React
+└── server/       # Optional Node file server
 ```
+
+## Screenshots
+
+![Welcome screen — drag folder or choose directory](docs/screenshots/welcome.png)
+
+## Integrations (roadmap)
+
+- IndexedDB watch progress and resume timestamps
+- Sidecar `.json` metadata per folder
+- Plugin hook: `window.DTube.registerFilter(fn)`
 
 ## Tech stack
 
-Vite · React 19 · CSS glassmorphism · File System Access API
+Vite · React 19 · glassmorphism CSS · Canvas thumbnails
 
 ## License
 
