@@ -9,6 +9,14 @@ export async function getCachedThumbnail(videoId) {
   return URL.createObjectURL(blob);
 }
 
+export async function getCachedPreviewMeta(videoId) {
+  return idbGet('previewMeta', videoId);
+}
+
+export async function cachePreviewMeta(videoId, meta) {
+  await idbSet('previewMeta', videoId, meta);
+}
+
 export async function cacheThumbnail(videoId, dataUrl) {
   if (!dataUrl?.startsWith('data:')) return;
   const res = await fetch(dataUrl);

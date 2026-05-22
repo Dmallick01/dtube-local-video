@@ -1,8 +1,11 @@
-import { generateThumbnail } from './thumbnailGenerator';
-import { getCachedThumbnail, cacheThumbnail } from '../lib/storage';
+import { probeVideo } from './mediaProbe';
+import { getCachedThumbnail, cacheThumbnail, getCachedPreviewMeta, cachePreviewMeta } from '../lib/storage';
 
-/** Process files with limited concurrency; reuse IndexedDB thumbnail cache. */
-export async function processVideosBatch(files, { concurrency = 4, onProgress } = {}) {
+/** Probe thumbnails + preview window (15–25%) with IndexedDB cache. */
+export async function processVideosBatch(
+  files,
+  { concurrency = 4, onProgress, previewStartPct = 15, previewEndPct = 25 } = {},
+) {
   const results = new Array(files.length);
   let completed = 0;
   let index = 0;
@@ -15,11 +18,26 @@ export async function processVideosBatch(files, { concurrency = 4, onProgress } 
       const relativePath = file.webkitRelativePath || file.name;
 
       let thumbnail = await getCachedThumbnail(id).catch(() => null);
-      if (!thumbnail) {
-        const generated = await generateThumbnail(file).catch(() => null);
-        if (generated) {
-          thumbnail = generated;
-          await cacheThumbnail(id, generated).catch(() => {});
+      let meta = await getCachedPreviewMeta(id).catch(() => null);
+
+      if (!meta) {
+        const probed = await probeVideo(file, { previewStartPct, previewEndPct, thumbPct: previewStartPct });
+        meta = {
+          duration: probed.duration,
+          previewStart: probed.previewStart,
+          previewEnd: probed.previewEnd,
+          previewPlayable: probed.previewPlayable,
+        };
+        await cachePreviewMeta(id, meta).catch(() => {});
+        if (!thumbnail && probed.thumbnail) {
+          thumbnail = probed.thumbnail;
+          await cacheThumbnail(id, probed.thumbnail).catch(() => {});
+        }
+      } else if (!thumbnail) {
+        const probed = await probeVideo(file, { previewStartPct, previewEndPct, thumbPct: previewStartPct });
+        if (probed.thumbnail) {
+          thumbnail = probed.thumbnail;
+          await cacheThumbnail(id, probed.thumbnail).catch(() => {});
         }
       }
 
@@ -31,7 +49,10 @@ export async function processVideosBatch(files, { concurrency = 4, onProgress } 
         size: file.size,
         createdAt: file.lastModified,
         thumbnail,
-        duration: 0,
+        duration: meta?.duration ?? 0,
+        previewStart: meta?.previewStart ?? 0,
+        previewEnd: meta?.previewEnd ?? 0,
+        previewPlayable: meta?.previewPlayable ?? false,
       };
       completed += 1;
       onProgress?.(Math.round((completed / files.length) * 100), completed, files.length);

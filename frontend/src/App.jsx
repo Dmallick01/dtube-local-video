@@ -1,14 +1,16 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { scanFiles } from './utils/fileScanner';
 import { processVideosBatch } from './utils/processVideos';
-import VideoCard from './components/VideoCard';
 import SidebarControls from './components/SidebarControls';
 import VideoPlayer from './components/VideoPlayer';
 import AppToolbar from './components/AppToolbar';
 import PlaylistPanel from './components/PlaylistPanel';
 import ShortcutOverlay from './components/ShortcutOverlay';
-import VideoListView from './components/VideoListView';
+import GalleryContent from './components/GalleryContent';
 import { fuzzyFilter } from './lib/fuzzy';
+import { groupVideos } from './lib/groupVideos';
+import { sortVideos, orderByIds } from './lib/sortVideos';
+import { shuffleWithAlgorithm } from './lib/shuffleAlgorithms';
 import {
   getFavorites,
   toggleFavorite,
@@ -37,6 +39,12 @@ function App() {
   const folderInputRef = useRef(null);
 
   const [sortOption, setSortOption] = useState('date_desc');
+  const [groupBy, setGroupBy] = useState('none');
+  const [shuffleAlgorithm, setShuffleAlgorithm] = useState('fisher-yates');
+  const [shuffleScope, setShuffleScope] = useState('library');
+  const [customOrder, setCustomOrder] = useState(null);
+  const [previewStartPct, setPreviewStartPct] = useState(15);
+  const [previewEndPct, setPreviewEndPct] = useState(25);
   const [filterExt, setFilterExt] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [gridCols, setGridCols] = useState('auto');
@@ -103,14 +111,17 @@ function App() {
       setProgressLabel(`Indexing ${videoFiles.length} videos…`);
       const processed = await processVideosBatch(videoFiles, {
         concurrency: 6,
+        previewStartPct,
+        previewEndPct,
         onProgress: (pct, done, total) => {
           setProgress(pct);
-          setProgressLabel(`${done} / ${total} thumbnails`);
+          setProgressLabel(`${done} / ${total} · thumbs + preview window`);
         },
       });
 
       setVideos(processed);
       setQueue(processed.map((v) => v.id));
+      setCustomOrder(null);
       setSearchQuery('');
       setFavoritesOnly(false);
       pushFolderHistory({ name: label, count: processed.length });
@@ -118,7 +129,7 @@ function App() {
       await refreshProgressMap(processed);
       setAppState('gallery');
     },
-    [refreshProgressMap],
+    [refreshProgressMap, previewStartPct, previewEndPct],
   );
 
   const ingestFromFileList = async (files, label) => {
@@ -164,32 +175,77 @@ function App() {
     return m;
   }, [videos]);
 
-  const processedVideos = useMemo(() => {
+  const filteredVideos = useMemo(() => {
     let result = [...videos];
     if (favoritesOnly) result = result.filter((v) => favorites.has(v.id));
     if (filterExt !== 'all') {
       result = result.filter((v) => v.name.toLowerCase().endsWith(filterExt));
     }
     result = fuzzyFilter(result, searchQuery, (v) => v.relativePath || v.name);
-    result.sort((a, b) => {
-      switch (sortOption) {
-        case 'name_asc': return a.name.localeCompare(b.name);
-        case 'name_desc': return b.name.localeCompare(a.name);
-        case 'size_asc': return a.size - b.size;
-        case 'size_desc': return b.size - a.size;
-        case 'date_asc': return a.createdAt - b.createdAt;
-        case 'date_desc':
-        default: return b.createdAt - a.createdAt;
-      }
-    });
     return applyPluginFilters(result);
-  }, [videos, sortOption, filterExt, searchQuery, favoritesOnly, favorites]);
+  }, [videos, filterExt, searchQuery, favoritesOnly, favorites]);
+
+  const displayVideos = useMemo(() => {
+    if (customOrder?.length) {
+      return orderByIds(filteredVideos, customOrder);
+    }
+    return sortVideos(filteredVideos, sortOption);
+  }, [filteredVideos, sortOption, customOrder]);
+
+  const galleryGroups = useMemo(
+    () => groupVideos(displayVideos, groupBy),
+    [displayVideos, groupBy],
+  );
+
+  const handleShuffle = () => {
+    const seed = Date.now();
+    const baseList = sortVideos(filteredVideos, sortOption);
+    let ids;
+    if (shuffleScope === 'group' && groupBy !== 'none') {
+      const sections = groupVideos(baseList, groupBy);
+      ids = sections.flatMap((g) =>
+        shuffleWithAlgorithm(
+          g.videos.map((v) => v.id),
+          shuffleAlgorithm,
+          seed + g.key.length,
+        ),
+      );
+    } else {
+      ids = shuffleWithAlgorithm(
+        baseList.map((v) => v.id),
+        shuffleAlgorithm,
+        seed,
+      );
+    }
+    setCustomOrder(ids);
+    setQueue(ids);
+  };
+
+  const handleResetOrder = () => {
+    setCustomOrder(null);
+    setQueue(displayVideos.map((v) => v.id));
+  };
+
+  useEffect(() => {
+    if (!customOrder && displayVideos.length) {
+      setQueue((q) => {
+        const ids = displayVideos.map((v) => v.id);
+        if (q.length === ids.length && q.every((id, i) => id === ids[i])) return q;
+        return ids;
+      });
+    }
+  }, [displayVideos, customOrder]);
+
+  const setSortOptionWrapped = (v) => {
+    setSortOption(v);
+    setCustomOrder(null);
+  };
 
   const playOrder = useMemo(() => {
-    const ordered = queue.filter((id) => processedVideos.some((v) => v.id === id));
-    const missing = processedVideos.map((v) => v.id).filter((id) => !ordered.includes(id));
+    const ordered = queue.filter((id) => displayVideos.some((v) => v.id === id));
+    const missing = displayVideos.map((v) => v.id).filter((id) => !ordered.includes(id));
     return [...ordered, ...missing];
-  }, [queue, processedVideos]);
+  }, [queue, displayVideos]);
 
   const openVideo = async (video) => {
     const idx = playOrder.findIndex((id) => id === video.id);
@@ -271,6 +327,8 @@ function App() {
             </div>
           </div>
           <ul className="welcome-features">
+            <li>15–25% hover preview (processed with library)</li>
+            <li>Group, sort, 10 shuffle algorithms</li>
             <li>Playlist + drag reorder</li>
             <li>Resume via IndexedDB</li>
             <li>Favorites &amp; fuzzy path search</li>
@@ -313,8 +371,6 @@ function App() {
     );
   }
 
-  const minCol = gridCols === 'compact' ? 200 : gridCols === 'wide' ? 360 : 260;
-
   return (
     <div className="app-shell">
       <AppToolbar
@@ -325,7 +381,7 @@ function App() {
         favoritesOnly={favoritesOnly}
         onFavoritesOnlyChange={setFavoritesOnly}
         onShowShortcuts={() => setShortcutsOpen(true)}
-        onExportContactSheet={() => exportContactSheet(processedVideos)}
+        onExportContactSheet={() => exportContactSheet(displayVideos)}
         onOpenFolder={() => folderInputRef.current?.click()}
         showGalleryActions
       />
@@ -354,7 +410,8 @@ function App() {
           <h1>{libraryName || 'Library'}</h1>
           <p className="header-meta">
             {videos.length} files · {formatBytes(totalSize)}
-            {searchQuery && ` · ${processedVideos.length} shown`}
+            {searchQuery && ` · ${displayVideos.length} shown`}
+            {customOrder && ' · shuffled'}
           </p>
         </div>
         <div className="header-actions">
@@ -381,7 +438,7 @@ function App() {
           <h2 className="sidebar-title">Library</h2>
           <SidebarControls
             sortOption={sortOption}
-            setSortOption={setSortOption}
+            setSortOption={setSortOptionWrapped}
             filterExt={filterExt}
             setFilterExt={setFilterExt}
             extensions={extensions}
@@ -389,45 +446,43 @@ function App() {
             setSearchQuery={setSearchQuery}
             gridCols={gridCols}
             setGridCols={setGridCols}
+            groupBy={groupBy}
+            setGroupBy={setGroupBy}
+            shuffleAlgorithm={shuffleAlgorithm}
+            setShuffleAlgorithm={setShuffleAlgorithm}
+            shuffleScope={shuffleScope}
+            setShuffleScope={setShuffleScope}
+            previewStartPct={previewStartPct}
+            setPreviewStartPct={setPreviewStartPct}
+            previewEndPct={previewEndPct}
+            setPreviewEndPct={setPreviewEndPct}
+            onShuffle={handleShuffle}
+            onResetOrder={handleResetOrder}
+            customOrderActive={!!customOrder}
             folderHistory={folderHistory}
             onReopenFolder={() => folderInputRef.current?.click()}
           />
         </aside>
 
         <main className="content-area">
-          {processedVideos.length === 0 ? (
+          {displayVideos.length === 0 ? (
             <div className="empty-state">
               <p>No videos match your filters.</p>
               <button type="button" className="btn" onClick={() => { setSearchQuery(''); setFavoritesOnly(false); }}>
                 Clear filters
               </button>
             </div>
-          ) : viewMode === 'list' ? (
-            <VideoListView
-              videos={processedVideos}
+          ) : (
+            <GalleryContent
+              groups={galleryGroups}
+              viewMode={viewMode}
+              gridCols={gridCols}
               favorites={favorites}
               progressMap={progressMap}
               onPlay={openVideo}
               onToggleFavorite={handleToggleFavorite}
               onAddQueue={(id) => setQueue((q) => (q.includes(id) ? q : [...q, id]))}
             />
-          ) : (
-            <div
-              className="video-grid"
-              style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${minCol}px, 1fr))` }}
-            >
-              {processedVideos.map((video) => (
-                <VideoCard
-                  key={video.id}
-                  video={video}
-                  isFavorite={favorites.has(video.id)}
-                  onToggleFavorite={() => handleToggleFavorite(video.id)}
-                  watchSeconds={progressMap[video.id] || 0}
-                  onClick={() => openVideo(video)}
-                  onAddQueue={() => setQueue((q) => (q.includes(video.id) ? q : [...q, video.id]))}
-                />
-              ))}
-            </div>
           )}
         </main>
 
