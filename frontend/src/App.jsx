@@ -36,6 +36,7 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [progressLabel, setProgressLabel] = useState('');
   const [progressPhase, setProgressPhase] = useState('');
+  const [generatingGifs, setGeneratingGifs] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [libraryName, setLibraryName] = useState('');
   const folderInputRef = useRef(null);
@@ -99,6 +100,7 @@ function App() {
   const ingestFiles = useCallback(
     async (videoFiles, sidecarFiles, label = 'Library') => {
       setAppState('processing');
+      setGeneratingGifs(false);
       setLibraryName(label);
       setProgress(0);
       setProgressLabel('Scanning folder…');
@@ -114,19 +116,24 @@ function App() {
       const workers = defaultProcessConcurrency();
       const processed = await processVideosBatch(videoFiles, {
         concurrency: workers,
-        thumbConcurrency: workers,
-        gifConcurrency: workers,
         previewStartPct,
         previewEndPct,
+        onGalleryReady: (partial) => {
+          setVideos(partial);
+          setQueue(partial.map((v) => v.id));
+          setGeneratingGifs(true);
+          setAppState('gallery');
+        },
+        onVideoUpdated: (updated) => {
+          setVideos((prev) => prev.map((v) => (v.id === updated.id ? updated : v)));
+        },
         onProgress: (pct, done, total, phase) => {
           setProgress(pct);
           setProgressPhase(phase || '');
-          if (phase === 'meta') {
-            setProgressLabel(`Reading metadata (×${workers} workers)… ${done} / ${total}`);
+          if (phase === 'gif') {
+            setProgressLabel(`Hover GIFs (background)… ${done} / ${total}`);
           } else {
-            setProgressLabel(
-              `Thumbnails + GIFs in parallel (×${workers} files, 2 tasks each)… ${done} / ${total}`,
-            );
+            setProgressLabel(`Thumbnails (×${workers} workers)… ${done} / ${total}`);
           }
         },
       });
@@ -140,6 +147,8 @@ function App() {
       setHistoryTick((t) => t + 1);
       await refreshProgressMap(processed);
       setAppState('gallery');
+      setGeneratingGifs(false);
+      setProgressLabel('');
     },
     [refreshProgressMap, previewStartPct, previewEndPct],
   );
@@ -379,10 +388,11 @@ function App() {
               <div className="progress-fill" style={{ width: `${progress}%` }} />
             </div>
             <p>{progress}%</p>
-            {progressPhase === 'media' && (
-              <p className="progress-sub">
-                Each file: thumbnail and hover GIF built at the same time, many files in parallel.
-              </p>
+            {progressPhase === 'thumb' && (
+              <p className="progress-sub">One video decode per file — gallery opens when thumbnails finish.</p>
+            )}
+            {progressPhase === 'gif' && (
+              <p className="progress-sub">GIFs finish in the background; you can browse while they load.</p>
             )}
           </div>
         </div>
@@ -431,7 +441,15 @@ function App() {
             {videos.length} files · {formatBytes(totalSize)}
             {searchQuery && ` · ${displayVideos.length} shown`}
             {customOrder && ' · shuffled'}
+            {generatingGifs && ` · ${progressLabel || 'building hover GIFs…'}`}
           </p>
+          {generatingGifs && (
+            <div className="gif-progress-banner">
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${progress}%` }} />
+              </div>
+            </div>
+          )}
         </div>
         <div className="header-actions">
           <button type="button" className="btn" onClick={() => folderInputRef.current?.click()}>
