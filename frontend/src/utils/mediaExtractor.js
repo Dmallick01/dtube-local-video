@@ -4,7 +4,18 @@ import { previewGifRange } from './mediaProbe';
 const GIF_MAX_W = 240;
 const GIF_FRAMES = 5;
 const GIF_MAX_SEC = 3;
-const LOAD_TIMEOUT_MS = 15000;
+const LOAD_TIMEOUT_MS = 8000;
+const SEEK_TIMEOUT_MS = 3500;
+const EXTRACT_TIMEOUT_MS = 12000;
+
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      setTimeout(() => resolve(null), ms);
+    }),
+  ]);
+}
 
 function scaleSize(w, h, maxW) {
   const vw = w || 640;
@@ -14,50 +25,68 @@ function scaleSize(w, h, maxW) {
   return { width: maxW, height: Math.max(1, Math.round(vh * scale)) };
 }
 
-function waitForData(video) {
-  return new Promise((resolve) => {
-    if (video.readyState >= 2) return resolve();
-    video.addEventListener('loadeddata', () => resolve(), { once: true });
-    video.addEventListener('error', () => resolve(), { once: true });
-  });
+function waitForData(video, ms = 5000) {
+  return withTimeout(
+    new Promise((resolve) => {
+      if (video.readyState >= 2) return resolve(true);
+      video.addEventListener('loadeddata', () => resolve(true), { once: true });
+      video.addEventListener('error', () => resolve(false), { once: true });
+    }),
+    ms,
+  );
 }
 
 function seekTo(video, timeSec) {
-  return new Promise((resolve) => {
-    const onSeeked = () => {
-      video.removeEventListener('seeked', onSeeked);
-      resolve();
-    };
-    video.addEventListener('seeked', onSeeked);
-    video.currentTime = timeSec;
-  });
+  return withTimeout(
+    new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        video.removeEventListener('seeked', onSeeked);
+        resolve();
+      };
+      const onSeeked = () => finish();
+      video.addEventListener('seeked', onSeeked);
+      try {
+        const t = Math.max(0, timeSec);
+        if (Math.abs(video.currentTime - t) < 0.02) finish();
+        else video.currentTime = t;
+      } catch {
+        finish();
+      }
+    }),
+    SEEK_TIMEOUT_MS,
+  );
 }
 
 function loadVideo(file) {
-  return new Promise((resolve) => {
-    const video = document.createElement('video');
-    video.preload = 'auto';
-    video.muted = true;
-    video.playsInline = true;
-    const url = URL.createObjectURL(file);
-    video.src = url;
+  return withTimeout(
+    new Promise((resolve) => {
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.muted = true;
+      video.playsInline = true;
+      const url = URL.createObjectURL(file);
+      video.src = url;
 
-    const timeout = setTimeout(() => {
-      URL.revokeObjectURL(url);
-      resolve(null);
-    }, LOAD_TIMEOUT_MS);
+      const fail = () => {
+        URL.revokeObjectURL(url);
+        resolve(null);
+      };
 
-    video.onloadedmetadata = async () => {
-      clearTimeout(timeout);
-      await waitForData(video);
-      resolve({ video, url, duration: video.duration || 0 });
-    };
-    video.onerror = () => {
-      clearTimeout(timeout);
-      URL.revokeObjectURL(url);
-      resolve(null);
-    };
-  });
+      video.onloadedmetadata = async () => {
+        await waitForData(video, 4000);
+        if (!video.duration || !Number.isFinite(video.duration)) {
+          fail();
+          return;
+        }
+        resolve({ video, url, duration: video.duration });
+      };
+      video.onerror = fail;
+    }),
+    LOAD_TIMEOUT_MS,
+  );
 }
 
 function captureJpeg(video, canvas, ctx, outW, outH) {
@@ -66,7 +95,7 @@ function captureJpeg(video, canvas, ctx, outW, outH) {
   canvas.height = outH;
   ctx.drawImage(video, 0, 0, outW, outH);
   try {
-    return canvas.toDataURL('image/jpeg', 0.55);
+    return canvas.toDataURL('image/jpeg', 0.5);
   } catch {
     return null;
   }
@@ -83,42 +112,38 @@ function captureRgba(video, canvas, ctx, outW, outH) {
 
 function encodeGif(frames, delayCs) {
   if (frames.length < 2) return null;
-  const gif = GIFEncoder();
-  for (const frame of frames) {
-    const palette = quantize(frame.rgba, 128, { format: 'rgb565' });
-    const index = applyPalette(frame.rgba, palette, 'rgb565');
-    gif.writeFrame(index, frame.width, frame.height, { palette, delay: delayCs });
+  try {
+    const gif = GIFEncoder();
+    for (const frame of frames) {
+      const palette = quantize(frame.rgba, 96, { format: 'rgb565' });
+      const index = applyPalette(frame.rgba, palette, 'rgb565');
+      gif.writeFrame(index, frame.width, frame.height, { palette, delay: delayCs });
+    }
+    gif.finish();
+    return new Blob([gif.bytes()], { type: 'image/gif' });
+  } catch {
+    return null;
   }
-  gif.finish();
-  return new Blob([gif.bytes()], { type: 'image/gif' });
 }
 
-/**
- * One video decode per file: metadata + optional thumbnail + optional GIF.
- */
-export async function extractFileMedia(
+const EMPTY = {
+  duration: 0,
+  previewStart: 0,
+  previewEnd: 0,
+  thumbnail: null,
+  previewGifBlob: null,
+};
+
+async function extractFileMediaInner(
   file,
-  {
-    previewStartPct = 15,
-    previewEndPct = 25,
-    needThumb = true,
-    needGif = true,
-  } = {},
+  { previewStartPct = 15, previewEndPct = 25, needThumb = true, needGif = true },
 ) {
   const loaded = await loadVideo(file);
-  if (!loaded?.video) {
-    return {
-      duration: 0,
-      previewStart: 0,
-      previewEnd: 0,
-      thumbnail: null,
-      previewGifBlob: null,
-    };
-  }
+  if (!loaded?.video) return { ...EMPTY };
 
   const { video, url, duration } = loaded;
-  const previewStart = duration ? (duration * previewStartPct) / 100 : 0;
-  const previewEnd = duration ? Math.max(previewStart + 0.1, (duration * previewEndPct) / 100) : 0;
+  const previewStart = (duration * previewStartPct) / 100;
+  const previewEnd = Math.max(previewStart + 0.1, (duration * previewEndPct) / 100);
   const gifRange = previewGifRange(previewStart, previewEnd, GIF_MAX_SEC);
 
   const { width: outW, height: outH } = scaleSize(video.videoWidth, video.videoHeight, GIF_MAX_W);
@@ -137,12 +162,11 @@ export async function extractFileMedia(
 
     if (needGif && gifRange.end > gifRange.start) {
       const span = gifRange.end - gifRange.start;
-      const frameCount = GIF_FRAMES;
-      const delayCs = Math.max(4, Math.round((span / frameCount) * 100));
+      const delayCs = Math.max(4, Math.round((span / GIF_FRAMES) * 100));
       const frames = [];
 
-      for (let i = 0; i < frameCount; i++) {
-        const t = gifRange.start + (span * i) / Math.max(1, frameCount - 1);
+      for (let i = 0; i < GIF_FRAMES; i++) {
+        const t = gifRange.start + (span * i) / Math.max(1, GIF_FRAMES - 1);
         await seekTo(video, Math.min(t, duration - 0.05));
         const rgba = captureRgba(video, canvas, ctx, outW, outH);
         if (rgba?.length) frames.push({ width: outW, height: outH, rgba });
@@ -152,6 +176,8 @@ export async function extractFileMedia(
     }
   } finally {
     URL.revokeObjectURL(url);
+    video.removeAttribute('src');
+    video.load();
   }
 
   return {
@@ -163,4 +189,10 @@ export async function extractFileMedia(
     thumbnail,
     previewGifBlob,
   };
+}
+
+/** One decode per call; always resolves (never hangs). */
+export async function extractFileMedia(file, options = {}) {
+  const result = await withTimeout(extractFileMediaInner(file, options), EXTRACT_TIMEOUT_MS);
+  return result || { ...EMPTY };
 }

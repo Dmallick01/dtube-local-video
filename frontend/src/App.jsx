@@ -40,6 +40,8 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [libraryName, setLibraryName] = useState('');
   const folderInputRef = useRef(null);
+  const ingestAbortRef = useRef(null);
+  const partialVideosRef = useRef([]);
 
   const [sortOption, setSortOption] = useState('date_desc');
   const [groupBy, setGroupBy] = useState('none');
@@ -113,16 +115,30 @@ function App() {
       }
 
       setProgressLabel(`Indexing ${videoFiles.length} videos…`);
-      const workers = defaultProcessConcurrency();
+      const workers = defaultProcessConcurrency(videoFiles.length);
+      const skipGifs = videoFiles.length > 500;
+      ingestAbortRef.current?.abort();
+      const abort = new AbortController();
+      ingestAbortRef.current = abort;
+      partialVideosRef.current = [];
+
       const processed = await processVideosBatch(videoFiles, {
         concurrency: workers,
         previewStartPct,
         previewEndPct,
+        skipGifs,
+        signal: abort.signal,
         onGalleryReady: (partial) => {
+          partialVideosRef.current = partial;
           setVideos(partial);
           setQueue(partial.map((v) => v.id));
-          setGeneratingGifs(true);
+          setGeneratingGifs(!skipGifs);
           setAppState('gallery');
+        },
+        onVideosSnapshot: (snap) => {
+          partialVideosRef.current = snap;
+          setVideos(snap);
+          setQueue(snap.map((v) => v.id));
         },
         onVideoUpdated: (updated) => {
           setVideos((prev) => prev.map((v) => (v.id === updated.id ? updated : v)));
@@ -389,11 +405,34 @@ function App() {
             </div>
             <p>{progress}%</p>
             {progressPhase === 'thumb' && (
-              <p className="progress-sub">One video decode per file — gallery opens when thumbnails finish.</p>
+              <p className="progress-sub">
+                Gallery opens after ~40 thumbnails. Stuck? Open gallery now — bad files time out in 12s.
+              </p>
             )}
             {progressPhase === 'gif' && (
               <p className="progress-sub">GIFs finish in the background; you can browse while they load.</p>
             )}
+            <div className="progress-actions">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => {
+                  partialVideosRef.current = partialVideosRef.current.length
+                    ? partialVideosRef.current
+                    : [];
+                  ingestAbortRef.current?.abort();
+                  if (partialVideosRef.current.length) {
+                    setVideos(partialVideosRef.current);
+                    setQueue(partialVideosRef.current.map((v) => v.id));
+                  }
+                  setGeneratingGifs(false);
+                  setAppState('gallery');
+                  setProgressLabel('Opened gallery (processing stopped)');
+                }}
+              >
+                Open gallery now
+              </button>
+            </div>
           </div>
         </div>
       </>
