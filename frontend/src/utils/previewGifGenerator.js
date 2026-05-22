@@ -1,17 +1,31 @@
 import { GIFEncoder, quantize, applyPalette } from 'gifenc';
 
 const MAX_WIDTH = 320;
-const MAX_FRAMES = 12;
-const MAX_SPAN_SEC = 4;
-const FRAME_TIMEOUT_MS = 12000;
+const MAX_FRAMES = 10;
+const MAX_SPAN_SEC = 3;
+const FRAME_TIMEOUT_MS = 20000;
 
 function scaleSize(w, h, maxW) {
-  if (w <= maxW) return { width: w, height: h };
-  const scale = maxW / w;
-  return { width: maxW, height: Math.round(h * scale) };
+  const vw = w || 640;
+  const vh = h || 360;
+  if (vw <= maxW) return { width: vw, height: vh };
+  const scale = maxW / vw;
+  return { width: maxW, height: Math.max(1, Math.round(vh * scale)) };
+}
+
+function waitForData(video) {
+  return new Promise((resolve) => {
+    if (video.readyState >= 2) {
+      resolve();
+      return;
+    }
+    video.addEventListener('loadeddata', () => resolve(), { once: true });
+    video.addEventListener('error', () => resolve(), { once: true });
+  });
 }
 
 function captureRgba(video, canvas, ctx, outW, outH) {
+  if (!video.videoWidth || !video.videoHeight) return null;
   canvas.width = outW;
   canvas.height = outH;
   ctx.drawImage(video, 0, 0, outW, outH);
@@ -23,17 +37,17 @@ function seekTo(video, timeSec) {
   return new Promise((resolve) => {
     const onSeeked = () => {
       video.removeEventListener('seeked', onSeeked);
-      resolve();
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
     };
     video.addEventListener('seeked', onSeeked);
     video.currentTime = timeSec;
   });
 }
 
-function loadVideoMetadata(file) {
+function loadVideoForFrames(file) {
   return new Promise((resolve) => {
     const video = document.createElement('video');
-    video.preload = 'metadata';
+    video.preload = 'auto';
     video.muted = true;
     video.playsInline = true;
     const url = URL.createObjectURL(file);
@@ -44,10 +58,12 @@ function loadVideoMetadata(file) {
       resolve({ video: null, url: null, duration: 0 });
     }, FRAME_TIMEOUT_MS);
 
-    video.onloadedmetadata = () => {
+    video.onloadedmetadata = async () => {
       clearTimeout(timeout);
+      await waitForData(video);
       resolve({ video, url, duration: video.duration || 0 });
     };
+
     video.onerror = () => {
       clearTimeout(timeout);
       URL.revokeObjectURL(url);
@@ -57,23 +73,20 @@ function loadVideoMetadata(file) {
 }
 
 /**
- * Sample frames between startSec–endSec and encode a looping GIF (processed offline).
+ * Sample up to 3s between startSec–endSec; encode looping GIF for hover (no audio).
  */
 export async function generatePreviewGif(file, startSec, endSec, { maxFrames = MAX_FRAMES } = {}) {
-  const { video, url, duration } = await loadVideoMetadata(file);
+  const { video, url, duration } = await loadVideoForFrames(file);
   if (!video || !duration || endSec <= startSec) {
     if (url) URL.revokeObjectURL(url);
     return null;
   }
 
   const span = Math.min(endSec - startSec, MAX_SPAN_SEC);
-  const end = startSec + span;
-  const frameCount = Math.max(4, Math.min(maxFrames, Math.ceil(span * 3)));
-  const delayCs = Math.max(4, Math.round((span / frameCount) * 100));
+  const frameCount = Math.max(6, Math.min(maxFrames, Math.round(span * 4)));
+  const delayCs = Math.max(3, Math.round((span / frameCount) * 100));
 
-  const vw = video.videoWidth || 640;
-  const vh = video.videoHeight || 360;
-  const { width: outW, height: outH } = scaleSize(vw, vh, MAX_WIDTH);
+  const { width: outW, height: outH } = scaleSize(video.videoWidth, video.videoHeight, MAX_WIDTH);
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
@@ -81,11 +94,12 @@ export async function generatePreviewGif(file, startSec, endSec, { maxFrames = M
   try {
     for (let i = 0; i < frameCount; i++) {
       const t = startSec + (span * i) / Math.max(1, frameCount - 1);
-      await seekTo(video, Math.min(t, duration - 0.05));
+      await seekTo(video, Math.min(Math.max(0, t), duration - 0.05));
       const rgba = captureRgba(video, canvas, ctx, outW, outH);
-      frames.push({ width: outW, height: outH, rgba });
+      if (rgba?.length) frames.push({ width: outW, height: outH, rgba });
     }
-  } catch {
+  } catch (err) {
+    console.warn('GIF frame capture failed', file.name, err);
     return null;
   } finally {
     URL.revokeObjectURL(url);
@@ -93,17 +107,21 @@ export async function generatePreviewGif(file, startSec, endSec, { maxFrames = M
 
   if (frames.length < 2) return null;
 
-  const gif = GIFEncoder();
-  for (const frame of frames) {
-    const palette = quantize(frame.rgba, 256);
-    const index = applyPalette(frame.rgba, palette);
-    gif.writeFrame(index, frame.width, frame.height, {
-      palette,
-      delay: delayCs,
-      repeat: 0,
-    });
+  try {
+    const gif = GIFEncoder();
+    for (const frame of frames) {
+      const palette = quantize(frame.rgba, 256);
+      const index = applyPalette(frame.rgba, palette);
+      gif.writeFrame(index, frame.width, frame.height, {
+        palette,
+        delay: delayCs,
+      });
+    }
+    gif.finish();
+    const bytes = gif.bytes();
+    return new Blob([bytes], { type: 'image/gif' });
+  } catch (err) {
+    console.warn('GIF encode failed', file.name, err);
+    return null;
   }
-  gif.finish();
-
-  return new Blob([gif.bytes()], { type: 'image/gif' });
 }

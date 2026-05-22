@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+import { flushSync } from 'react-dom';
 import { scanFiles } from './utils/fileScanner';
 import { processVideosBatch } from './utils/processVideos';
 import SidebarControls from './components/SidebarControls';
@@ -34,6 +35,7 @@ function App() {
   const [allFiles, setAllFiles] = useState([]);
   const [progress, setProgress] = useState(0);
   const [progressLabel, setProgressLabel] = useState('');
+  const [progressPhase, setProgressPhase] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [libraryName, setLibraryName] = useState('');
   const folderInputRef = useRef(null);
@@ -113,9 +115,14 @@ function App() {
         concurrency: 6,
         previewStartPct,
         previewEndPct,
-        onProgress: (pct, done, total) => {
+        onProgress: (pct, done, total, phase) => {
           setProgress(pct);
-          setProgressLabel(`${done} / ${total} · thumbs + preview GIFs`);
+          setProgressPhase(phase || '');
+          if (phase === 'gif') {
+            setProgressLabel(`Generating preview GIFs… ${done} / ${total}`);
+          } else {
+            setProgressLabel(`Generating thumbnails… ${done} / ${total}`);
+          }
         },
       });
 
@@ -249,8 +256,10 @@ function App() {
 
   const openVideo = async (video) => {
     const idx = playOrder.findIndex((id) => id === video.id);
-    setCurrentIndex(idx);
-    setCurrentVideo(video);
+    flushSync(() => {
+      setCurrentIndex(idx);
+      setCurrentVideo(video);
+    });
     if (!queue.includes(video.id)) setQueue((q) => [...q, video.id]);
 
     const sub = findSubtitleFile(video, allFiles);
@@ -365,6 +374,12 @@ function App() {
               <div className="progress-fill" style={{ width: `${progress}%` }} />
             </div>
             <p>{progress}%</p>
+            {progressPhase === 'gif' && (
+              <p className="progress-sub">Silent 3s GIF clips for hover — full video keeps sound when you click play.</p>
+            )}
+            {progressPhase === 'thumb' && (
+              <p className="progress-sub">Step 1 of 2 — static thumbnails</p>
+            )}
           </div>
         </div>
       </>

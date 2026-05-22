@@ -1,55 +1,48 @@
-import { generateThumbnailAtTime } from './thumbnailGenerator';
-import { generatePreviewGif } from './previewGifGenerator';
+/** Quick metadata + 15–25% window (GIF clip capped at 3s elsewhere). */
+export function probeMetadata(file, { previewStartPct = 15, previewEndPct = 25 } = {}) {
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
 
-/** Load metadata, static thumbnail, and hover preview GIF for the timeline window. */
-export async function probeVideo(
-  file,
-  { previewStartPct = 15, previewEndPct = 25, thumbPct = 15 } = {},
-) {
-  const video = document.createElement('video');
-  video.preload = 'metadata';
-  video.muted = true;
-  video.playsInline = true;
+    const url = URL.createObjectURL(file);
+    video.src = url;
 
-  const url = URL.createObjectURL(file);
-  video.src = url;
-
-  const meta = await new Promise((resolve) => {
     const timeout = setTimeout(() => {
       URL.revokeObjectURL(url);
-      resolve({ duration: 0, previewStart: 0, previewEnd: 0 });
+      resolve({
+        duration: 0,
+        previewStart: 0,
+        previewEnd: 0,
+        previewStartPct,
+        previewEndPct,
+      });
     }, 10000);
 
     const done = (duration) => {
       clearTimeout(timeout);
       const d = duration && Number.isFinite(duration) ? duration : 0;
       const start = d ? (d * previewStartPct) / 100 : 0;
-      const end = d ? Math.max(start + 0.5, (d * previewEndPct) / 100) : 0;
+      const regionEnd = d ? Math.max(start + 0.1, (d * previewEndPct) / 100) : 0;
       URL.revokeObjectURL(url);
-      resolve({ duration: d, previewStart: start, previewEnd: end });
+      resolve({
+        duration: d,
+        previewStart: start,
+        previewEnd: regionEnd,
+        previewStartPct,
+        previewEndPct,
+      });
     };
 
     video.onloadedmetadata = () => done(video.duration);
     video.onerror = () => done(0);
   });
+}
 
-  let thumbnail = null;
-  let previewGifBlob = null;
-
-  if (meta.duration > 0 && meta.previewEnd > meta.previewStart) {
-    const tThumb = (meta.duration * thumbPct) / 100;
-    thumbnail = await generateThumbnailAtTime(file, tThumb).catch(() => null);
-    previewGifBlob = await generatePreviewGif(file, meta.previewStart, meta.previewEnd).catch(
-      () => null,
-    );
-  }
-
-  return {
-    ...meta,
-    previewStartPct,
-    previewEndPct,
-    thumbnail,
-    previewGifBlob,
-    hasPreviewGif: !!previewGifBlob,
-  };
+/** End time for GIF: within 15–25% region, max 3 seconds long. */
+export function previewGifRange(previewStart, previewEnd, maxSec = 3) {
+  if (previewEnd <= previewStart) return { start: previewStart, end: previewStart };
+  const end = Math.min(previewEnd, previewStart + maxSec);
+  return { start: previewStart, end };
 }

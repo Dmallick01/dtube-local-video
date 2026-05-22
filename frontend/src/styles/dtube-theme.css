@@ -507,6 +507,23 @@ a { color: var(--chover); }
   color: var(--cdisabled);
 }
 
+.progress-sub {
+  font-size: 11px;
+  color: var(--cdisabled);
+  margin-top: 8px;
+  max-width: 420px;
+}
+
+.player-play-overlay {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  padding: 12px 24px;
+  font-size: 14px;
+}
+
 /* Player */
 .player-overlay {
   position: fixed;
@@ -541,6 +558,7 @@ a { color: var(--chover); }
 }
 
 .player-video-wrap {
+  position: relative;
   flex: 1;
   display: flex;
   align-items: center;

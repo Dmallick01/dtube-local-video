@@ -11,7 +11,7 @@ const VideoCard = ({
   const [isHovered, setIsHovered] = useState(false);
   const timeoutRef = useRef(null);
 
-  const canPreview = !!video.previewGifUrl;
+  const canPreview = !!(video.previewGifUrl && video.hasPreviewGif);
 
   const formatPreviewLabel = () => {
     if (!video.duration) return 'GIF';

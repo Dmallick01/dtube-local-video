@@ -12,22 +12,54 @@ const VideoPlayer = ({
   hasNext,
   hasPrev,
   onShowShortcuts,
+  playWithSound = true,
 }) => {
   const videoRef = useRef(null);
   const wrapperRef = useRef(null);
   const saveTimer = useRef(null);
+  const playAttempted = useRef(false);
 
   const [speed, setSpeed] = useState(1);
   const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [videoUrl, setVideoUrl] = useState('');
   const [pipActive, setPipActive] = useState(false);
+  const [needsClickToPlay, setNeedsClickToPlay] = useState(false);
 
   useEffect(() => {
+    playAttempted.current = false;
+    setNeedsClickToPlay(false);
     const url = URL.createObjectURL(video.file);
     setVideoUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [video]);
+
+  const applyAudio = useCallback(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    el.muted = muted;
+    el.volume = volume;
+  }, [muted, volume]);
+
+  const startPlayback = useCallback(async () => {
+    const el = videoRef.current;
+    if (!el || playAttempted.current) return;
+    playAttempted.current = true;
+    el.muted = false;
+    el.volume = volume;
+    setMuted(false);
+    try {
+      await el.play();
+      setNeedsClickToPlay(false);
+    } catch {
+      setNeedsClickToPlay(true);
+    }
+  }, [volume]);
+
+  useEffect(() => {
+    applyAudio();
+  }, [applyAudio, videoUrl]);
 
   const saveProgress = useCallback(() => {
     const el = videoRef.current;
@@ -49,6 +81,16 @@ const VideoPlayer = ({
   }, [video.id, videoUrl]);
 
   useEffect(() => {
+    const el = videoRef.current;
+    if (!el || !videoUrl || !playWithSound) return;
+
+    const onReady = () => startPlayback();
+    if (el.readyState >= 2) onReady();
+    else el.addEventListener('canplay', onReady, { once: true });
+    return () => el.removeEventListener('canplay', onReady);
+  }, [videoUrl, playWithSound, startPlayback]);
+
+  useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.target.tagName === 'INPUT') return;
       switch (e.key) {
@@ -57,8 +99,16 @@ const VideoPlayer = ({
           break;
         case ' ':
           e.preventDefault();
-          if (videoRef.current?.paused) videoRef.current.play();
+          if (videoRef.current?.paused) startPlayback();
           else videoRef.current?.pause();
+          break;
+        case 'm':
+        case 'M':
+          setMuted((m) => {
+            const next = !m;
+            if (videoRef.current) videoRef.current.muted = next;
+            return next;
+          });
           break;
         case 'ArrowRight':
           if (e.shiftKey && hasNext) onNext?.();
@@ -93,7 +143,7 @@ const VideoPlayer = ({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, onNext, onPrev, hasNext, hasPrev, onShowShortcuts]);
+  }, [onClose, onNext, onPrev, hasNext, hasPrev, onShowShortcuts, startPlayback]);
 
   useEffect(() => {
     const onFs = () => setIsFullscreen(!!document.fullscreenElement);
@@ -135,6 +185,14 @@ const VideoPlayer = ({
     if (videoRef.current) videoRef.current.playbackRate = rate;
   };
 
+  const toggleMute = () => {
+    setMuted((m) => {
+      const next = !m;
+      if (videoRef.current) videoRef.current.muted = next;
+      return next;
+    });
+  };
+
   return (
     <div className="player-overlay">
       <div className="player-topbar">
@@ -152,16 +210,31 @@ const VideoPlayer = ({
       <div ref={wrapperRef} className={`player-shell ${isFullscreen ? 'fullscreen' : ''}`}>
         <div className="player-video-wrap">
           {videoUrl && (
-            <video
-              ref={videoRef}
-              src={videoUrl}
-              controls
-              autoPlay
-              className="player-video"
-              onTimeUpdate={saveProgress}
-            >
-              {subtitleUrl && <track kind="subtitles" src={subtitleUrl} default />}
-            </video>
+            <>
+              <video
+                ref={videoRef}
+                src={videoUrl}
+                controls
+                playsInline
+                className="player-video"
+                onTimeUpdate={saveProgress}
+                onVolumeChange={() => {
+                  const el = videoRef.current;
+                  if (!el) return;
+                  setMuted(el.muted);
+                  setVolume(el.volume);
+                }}
+              />
+              {needsClickToPlay && (
+                <button
+                  type="button"
+                  className="player-play-overlay btn btn-primary"
+                  onClick={startPlayback}
+                >
+                  Play with sound
+                </button>
+              )}
+            </>
           )}
         </div>
 
@@ -170,7 +243,7 @@ const VideoPlayer = ({
             <div className="player-meta">
               <h2>{video.name}</h2>
               <p>
-                Space · ←/→ seek · Shift+←/→ queue · N/P · F fullscreen · I PiP
+                Space play/pause · M mute · ←/→ seek · Shift+←/→ queue · N/P · F fullscreen · I PiP
                 {pipActive ? ' · PiP on' : ''}
                 {subtitleUrl ? ' · subtitles' : ''}
               </p>
@@ -181,6 +254,9 @@ const VideoPlayer = ({
               </button>
               <button type="button" disabled={!hasNext} onClick={onNext} className="player-group">
                 ⏭
+              </button>
+              <button type="button" className={`btn ${muted ? '' : 'btn-primary'}`} onClick={toggleMute}>
+                {muted ? 'Unmute' : 'Sound on'}
               </button>
               <div className="speed-chips">
                 {SPEED_PRESETS.map((r) => (
@@ -196,19 +272,27 @@ const VideoPlayer = ({
               </div>
               <div className="player-group">
                 <span>{Math.round(volume * 100)}%</span>
-                <button type="button" onClick={() => {
-                  const v = Math.min(1, volume + 0.1);
-                  setVolume(v);
-                  if (videoRef.current) videoRef.current.volume = v;
-                }}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const v = Math.min(1, volume + 0.1);
+                    setVolume(v);
+                    if (videoRef.current) {
+                      videoRef.current.volume = v;
+                      videoRef.current.muted = false;
+                      setMuted(false);
+                    }
+                  }}
                 >
                   +
                 </button>
-                <button type="button" onClick={() => {
-                  const v = Math.max(0, volume - 0.1);
-                  setVolume(v);
-                  if (videoRef.current) videoRef.current.volume = v;
-                }}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const v = Math.max(0, volume - 0.1);
+                    setVolume(v);
+                    if (videoRef.current) videoRef.current.volume = v;
+                  }}
                 >
                   −
                 </button>
