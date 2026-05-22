@@ -8,7 +8,17 @@
 
 **[https://dmallick01.github.io/dtube-local-video/](https://dmallick01.github.io/dtube-local-video/)**
 
-GitHub Pages hosts the built `frontend/dist/` app. **Choosing a folder only works locally** (browser security) — use `npm run dev` on your machine for full playback. The Pages deploy showcases the UI and PWA install shell.
+> **Important:** `https://dmallick01.github.io/` alone shows GitHub’s “no site here” page. Use the **full project URL** above (with trailing slash).
+
+GitHub Pages hosts the built `frontend/dist/` app. **Choosing a folder only works locally** (browser security) — use `npm run dev` on your machine for full playback.
+
+### Enable Pages (one-time)
+
+1. Repo **Settings → Pages**
+2. **Build and deployment → Source:** `GitHub Actions`
+3. Push to `main` or run workflow **Deploy DTube to GitHub Pages**
+
+Portfolio index (all demos): [dmallick01.github.io](https://dmallick01.github.io/) after `Dmallick01.github.io` repo is published.
 
 ## Quick start
 
