@@ -12,6 +12,13 @@ import {
 
 export const PREVIEW_GIF_VERSION = 1;
 
+/** Default worker count from CPU cores (capped for memory). */
+export function defaultProcessConcurrency() {
+  if (typeof navigator === 'undefined') return 6;
+  const cores = navigator.hardwareConcurrency || 4;
+  return Math.min(12, Math.max(4, cores));
+}
+
 function metaNeedsRefresh(meta, previewStartPct, previewEndPct) {
   if (!meta) return true;
   return (
@@ -22,154 +29,136 @@ function metaNeedsRefresh(meta, previewStartPct, previewEndPct) {
   );
 }
 
+async function runParallelPool(total, concurrency, onItemDone, worker) {
+  let index = 0;
+  let done = 0;
+
+  async function poolWorker() {
+    while (index < total) {
+      const slot = index++;
+      await worker(slot);
+      done += 1;
+      onItemDone(done, total);
+    }
+  }
+
+  const n = Math.min(Math.max(1, concurrency), Math.max(1, total));
+  await Promise.all(Array.from({ length: n }, () => poolWorker()));
+}
+
 function reportProgress(onProgress, phase, done, total) {
   if (!onProgress) return;
-  const half = total / 2;
-  if (phase === 'thumb') {
-    onProgress(Math.round((done / total) * 50), done, total, 'thumb');
+  if (phase === 'meta') {
+    onProgress(Math.round((done / total) * 25), done, total, 'meta');
   } else {
-    onProgress(50 + Math.round((done / total) * 50), done, total, 'gif');
+    onProgress(25 + Math.round((done / total) * 75), done, total, 'media');
   }
 }
 
-/** Phase 1: thumbnails + metadata. Phase 2: hover preview GIFs (≤3s, 15–25% slice). */
+/**
+ * Pass 1: metadata in parallel.
+ * Pass 2: per file, thumbnail + GIF generated in parallel (Promise.all), many files at once.
+ */
 export async function processVideosBatch(
   files,
-  { concurrency = 4, onProgress, previewStartPct = 15, previewEndPct = 25 } = {},
+  {
+    concurrency,
+    thumbConcurrency,
+    gifConcurrency,
+    onProgress,
+    previewStartPct = 15,
+    previewEndPct = 25,
+  } = {},
 ) {
+  const base = concurrency ?? defaultProcessConcurrency();
+  const mediaWorkers = Math.max(thumbConcurrency ?? base, gifConcurrency ?? base);
+  const metaWorkers = thumbConcurrency ?? base;
   const total = files.length;
-  const pending = files.map((file, i) => ({
+
+  const items = files.map((file, i) => ({
     i,
     file,
     id: file.id ?? `${file.name}-${file.size}-${file.lastModified}`,
     relativePath: file.webkitRelativePath || file.name,
   }));
 
+  const metas = new Array(total);
   const results = new Array(total);
-  let thumbDone = 0;
-  let gifDone = 0;
 
-  // —— Phase 1: thumbnails ——
-  let thumbIndex = 0;
-  async function thumbWorker() {
-    while (thumbIndex < pending.length) {
-      const slot = thumbIndex++;
-      const { file, id, relativePath, i } = pending[slot];
-
-      let thumbnail = await getCachedThumbnail(id).catch(() => null);
-      let meta = await getCachedPreviewMeta(id).catch(() => null);
-
-      if (!meta || meta.previewStartPct !== previewStartPct || meta.previewEndPct !== previewEndPct) {
-        meta = await probeMetadata(file, { previewStartPct, previewEndPct });
-      }
-
-      if (!thumbnail && meta.duration > 0) {
-        const tThumb = (meta.duration * previewStartPct) / 100;
-        thumbnail = await generateThumbnailAtTime(file, tThumb).catch(() => null);
-        if (thumbnail) await cacheThumbnail(id, thumbnail).catch(() => {});
-      }
-
-      const gifRange = previewGifRange(meta.previewStart, meta.previewEnd, 3);
-      const cachedGifUrl = await getCachedPreviewGif(id).catch(() => null);
-      const needsGif =
-        metaNeedsRefresh(meta, previewStartPct, previewEndPct) || !cachedGifUrl;
-
-      results[i] = {
-        id,
-        name: file.name,
-        relativePath,
-        file,
-        size: file.size,
-        createdAt: file.lastModified,
-        thumbnail,
-        previewGifUrl: cachedGifUrl,
-        duration: meta.duration ?? 0,
-        previewStart: gifRange.start,
-        previewEnd: gifRange.end,
-        hasPreviewGif: !!cachedGifUrl,
-        _meta: meta,
-        _needsGif: needsGif,
-      };
-
-      thumbDone += 1;
-      reportProgress(onProgress, 'thumb', thumbDone, total);
+  await runParallelPool(total, metaWorkers, (done, t) => {
+    reportProgress(onProgress, 'meta', done, t);
+  }, async (slot) => {
+    const { file, id } = items[slot];
+    let meta = await getCachedPreviewMeta(id).catch(() => null);
+    if (!meta || meta.previewStartPct !== previewStartPct || meta.previewEndPct !== previewEndPct) {
+      meta = await probeMetadata(file, { previewStartPct, previewEndPct });
     }
-  }
+    metas[slot] = meta;
+  });
 
-  const thumbWorkers = Array.from(
-    { length: Math.min(concurrency, pending.length) },
-    () => thumbWorker(),
-  );
-  await Promise.all(thumbWorkers);
+  await runParallelPool(total, mediaWorkers, (done, t) => {
+    reportProgress(onProgress, 'media', done, t);
+  }, async (slot) => {
+    const { file, id, relativePath, i } = items[slot];
+    const meta = metas[slot] || {};
+    const gifRange = previewGifRange(meta.previewStart ?? 0, meta.previewEnd ?? 0, 3);
 
-  // —— Phase 2: preview GIFs ——
-  const gifQueue = pending
-    .map((p) => results[p.i])
-    .filter((r) => r && r._needsGif);
+    const [cachedThumb, cachedGifUrl] = await Promise.all([
+      getCachedThumbnail(id).catch(() => null),
+      getCachedPreviewGif(id).catch(() => null),
+    ]);
 
-  let gifIndex = 0;
-  const gifConcurrency = Math.min(2, concurrency);
+    const needsThumb = !cachedThumb && meta.duration > 0;
+    const needsGif =
+      (metaNeedsRefresh(meta, previewStartPct, previewEndPct) || !cachedGifUrl) &&
+      gifRange.end > gifRange.start;
 
-  async function gifWorker() {
-    while (gifIndex < gifQueue.length) {
-      const entry = gifQueue[gifIndex++];
-      const { file, id } = entry;
-      const meta = entry._meta;
-      const gifRange = previewGifRange(meta.previewStart, meta.previewEnd, 3);
+    const thumbTask = needsThumb
+      ? (async () => {
+          const tThumb = (meta.duration * previewStartPct) / 100;
+          const thumb = await generateThumbnailAtTime(file, tThumb).catch(() => null);
+          if (thumb) await cacheThumbnail(id, thumb).catch(() => {});
+          return thumb;
+        })()
+      : Promise.resolve(cachedThumb);
 
-      let previewGifUrl = await getCachedPreviewGif(id).catch(() => null);
-      let blob = null;
-
-      if (!previewGifUrl && gifRange.end > gifRange.start) {
-        blob = await generatePreviewGif(file, gifRange.start, gifRange.end).catch(() => null);
-        if (blob) {
+    const gifTask = needsGif
+      ? (async () => {
+          const blob = await generatePreviewGif(file, gifRange.start, gifRange.end).catch(() => null);
+          if (!blob) return null;
           await cachePreviewGif(id, blob).catch(() => {});
-          previewGifUrl = URL.createObjectURL(blob);
-        }
-      }
+          return URL.createObjectURL(blob);
+        })()
+      : Promise.resolve(cachedGifUrl);
 
-      const storedMeta = {
-        duration: meta.duration,
-        previewStart: gifRange.start,
-        previewEnd: gifRange.end,
-        previewStartPct,
-        previewEndPct,
-        previewGifVersion: PREVIEW_GIF_VERSION,
-        hasPreviewGif: !!(previewGifUrl || blob),
-      };
-      await cachePreviewMeta(id, storedMeta).catch(() => {});
+    const [thumbnail, previewGifUrl] = await Promise.all([thumbTask, gifTask]);
 
-      entry.previewGifUrl = previewGifUrl;
-      entry.previewStart = gifRange.start;
-      entry.previewEnd = gifRange.end;
-      entry.hasPreviewGif = storedMeta.hasPreviewGif;
-      delete entry._meta;
-      delete entry._needsGif;
+    const storedMeta = {
+      duration: meta.duration,
+      previewStart: gifRange.start,
+      previewEnd: gifRange.end,
+      previewStartPct,
+      previewEndPct,
+      previewGifVersion: PREVIEW_GIF_VERSION,
+      hasPreviewGif: !!previewGifUrl,
+    };
+    await cachePreviewMeta(id, storedMeta).catch(() => {});
 
-      gifDone += 1;
-      reportProgress(onProgress, 'gif', gifDone, Math.max(gifQueue.length, 1));
-    }
-  }
-
-  if (gifQueue.length) {
-    const gifWorkers = Array.from({ length: Math.min(gifConcurrency, gifQueue.length) }, () =>
-      gifWorker(),
-    );
-    await Promise.all(gifWorkers);
-  } else {
-    reportProgress(onProgress, 'gif', 1, 1);
-  }
-
-  // Items that skipped phase 2 still need cached GIF URLs
-  for (const entry of results) {
-    if (!entry) continue;
-    if (!entry.previewGifUrl) {
-      entry.previewGifUrl = await getCachedPreviewGif(entry.id).catch(() => null);
-      entry.hasPreviewGif = !!entry.previewGifUrl;
-    }
-    delete entry._meta;
-    delete entry._needsGif;
-  }
+    results[i] = {
+      id,
+      name: file.name,
+      relativePath,
+      file,
+      size: file.size,
+      createdAt: file.lastModified,
+      thumbnail,
+      previewGifUrl,
+      duration: meta.duration ?? 0,
+      previewStart: gifRange.start,
+      previewEnd: gifRange.end,
+      hasPreviewGif: !!previewGifUrl,
+    };
+  });
 
   return results.filter(Boolean);
 }

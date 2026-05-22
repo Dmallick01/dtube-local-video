@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { scanFiles } from './utils/fileScanner';
-import { processVideosBatch } from './utils/processVideos';
+import { processVideosBatch, defaultProcessConcurrency } from './utils/processVideos';
 import SidebarControls from './components/SidebarControls';
 import VideoPlayer from './components/VideoPlayer';
 import AppToolbar from './components/AppToolbar';
@@ -111,17 +111,22 @@ function App() {
       }
 
       setProgressLabel(`Indexing ${videoFiles.length} videos…`);
+      const workers = defaultProcessConcurrency();
       const processed = await processVideosBatch(videoFiles, {
-        concurrency: 6,
+        concurrency: workers,
+        thumbConcurrency: workers,
+        gifConcurrency: workers,
         previewStartPct,
         previewEndPct,
         onProgress: (pct, done, total, phase) => {
           setProgress(pct);
           setProgressPhase(phase || '');
-          if (phase === 'gif') {
-            setProgressLabel(`Generating preview GIFs… ${done} / ${total}`);
+          if (phase === 'meta') {
+            setProgressLabel(`Reading metadata (×${workers} workers)… ${done} / ${total}`);
           } else {
-            setProgressLabel(`Generating thumbnails… ${done} / ${total}`);
+            setProgressLabel(
+              `Thumbnails + GIFs in parallel (×${workers} files, 2 tasks each)… ${done} / ${total}`,
+            );
           }
         },
       });
@@ -374,11 +379,10 @@ function App() {
               <div className="progress-fill" style={{ width: `${progress}%` }} />
             </div>
             <p>{progress}%</p>
-            {progressPhase === 'gif' && (
-              <p className="progress-sub">Silent 3s GIF clips for hover — full video keeps sound when you click play.</p>
-            )}
-            {progressPhase === 'thumb' && (
-              <p className="progress-sub">Step 1 of 2 — static thumbnails</p>
+            {progressPhase === 'media' && (
+              <p className="progress-sub">
+                Each file: thumbnail and hover GIF built at the same time, many files in parallel.
+              </p>
             )}
           </div>
         </div>
