@@ -115,7 +115,7 @@ function App() {
         previewEndPct,
         onProgress: (pct, done, total) => {
           setProgress(pct);
-          setProgressLabel(`${done} / ${total} · thumbs + preview window`);
+          setProgressLabel(`${done} / ${total} · thumbs + preview GIFs`);
         },
       });
 
@@ -327,7 +327,7 @@ function App() {
             </div>
           </div>
           <ul className="welcome-features">
-            <li>15–25% hover preview (processed with library)</li>
+            <li>15–25% hover preview GIFs (built during scan)</li>
             <li>Group, sort, 10 shuffle algorithms</li>
             <li>Playlist + drag reorder</li>
             <li>Resume via IndexedDB</li>

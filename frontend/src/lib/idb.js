@@ -1,5 +1,5 @@
 const DB_NAME = 'dtube-local';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise = null;
 
@@ -19,6 +19,9 @@ export function openDb() {
       }
       if (!db.objectStoreNames.contains('previewMeta')) {
         db.createObjectStore('previewMeta');
+      }
+      if (!db.objectStoreNames.contains('previewGifs')) {
+        db.createObjectStore('previewGifs');
       }
     };
   });

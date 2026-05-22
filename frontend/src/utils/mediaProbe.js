@@ -1,55 +1,55 @@
 import { generateThumbnailAtTime } from './thumbnailGenerator';
+import { generatePreviewGif } from './previewGifGenerator';
 
-const VIDEO_EXT_PLAYABLE = ['mp4', 'webm', 'mov', 'm4v'];
+/** Load metadata, static thumbnail, and hover preview GIF for the timeline window. */
+export async function probeVideo(
+  file,
+  { previewStartPct = 15, previewEndPct = 25, thumbPct = 15 } = {},
+) {
+  const video = document.createElement('video');
+  video.preload = 'metadata';
+  video.muted = true;
+  video.playsInline = true;
 
-export function isBrowserPlayable(name) {
-  const ext = name.split('.').pop().toLowerCase();
-  return VIDEO_EXT_PLAYABLE.includes(ext);
-}
+  const url = URL.createObjectURL(file);
+  video.src = url;
 
-/** Load metadata + thumbnail + hover preview window (default 15%–25% of timeline). */
-export function probeVideo(file, { previewStartPct = 15, previewEndPct = 25, thumbPct = 15 } = {}) {
-  return new Promise((resolve) => {
-    const video = document.createElement('video');
-    video.preload = 'metadata';
-    video.muted = true;
-    video.playsInline = true;
-
-    const url = URL.createObjectURL(file);
-    video.src = url;
-
+  const meta = await new Promise((resolve) => {
     const timeout = setTimeout(() => {
       URL.revokeObjectURL(url);
-      resolve({
-        duration: 0,
-        previewStart: 0,
-        previewEnd: 0,
-        thumbnail: null,
-        previewPlayable: isBrowserPlayable(file.name),
-      });
-    }, 8000);
+      resolve({ duration: 0, previewStart: 0, previewEnd: 0 });
+    }, 10000);
 
-    const finish = async (duration) => {
+    const done = (duration) => {
       clearTimeout(timeout);
       const d = duration && Number.isFinite(duration) ? duration : 0;
       const start = d ? (d * previewStartPct) / 100 : 0;
       const end = d ? Math.max(start + 0.5, (d * previewEndPct) / 100) : 0;
-      let thumbnail = null;
-      if (d > 0) {
-        const tThumb = (d * thumbPct) / 100;
-        thumbnail = await generateThumbnailAtTime(file, tThumb).catch(() => null);
-      }
       URL.revokeObjectURL(url);
-      resolve({
-        duration: d,
-        previewStart: start,
-        previewEnd: end,
-        thumbnail,
-        previewPlayable: isBrowserPlayable(file.name),
-      });
+      resolve({ duration: d, previewStart: start, previewEnd: end });
     };
 
-    video.onloadedmetadata = () => finish(video.duration);
-    video.onerror = () => finish(0);
+    video.onloadedmetadata = () => done(video.duration);
+    video.onerror = () => done(0);
   });
+
+  let thumbnail = null;
+  let previewGifBlob = null;
+
+  if (meta.duration > 0 && meta.previewEnd > meta.previewStart) {
+    const tThumb = (meta.duration * thumbPct) / 100;
+    thumbnail = await generateThumbnailAtTime(file, tThumb).catch(() => null);
+    previewGifBlob = await generatePreviewGif(file, meta.previewStart, meta.previewEnd).catch(
+      () => null,
+    );
+  }
+
+  return {
+    ...meta,
+    previewStartPct,
+    previewEndPct,
+    thumbnail,
+    previewGifBlob,
+    hasPreviewGif: !!previewGifBlob,
+  };
 }

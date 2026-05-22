@@ -1,7 +1,23 @@
 import { probeVideo } from './mediaProbe';
-import { getCachedThumbnail, cacheThumbnail, getCachedPreviewMeta, cachePreviewMeta } from '../lib/storage';
+import {
+  getCachedThumbnail,
+  cacheThumbnail,
+  getCachedPreviewMeta,
+  cachePreviewMeta,
+  getCachedPreviewGif,
+  cachePreviewGif,
+} from '../lib/storage';
 
-/** Probe thumbnails + preview window (15–25%) with IndexedDB cache. */
+function metaNeedsRefresh(meta, previewStartPct, previewEndPct) {
+  if (!meta) return true;
+  return (
+    meta.previewStartPct !== previewStartPct ||
+    meta.previewEndPct !== previewEndPct ||
+    !meta.hasPreviewGif
+  );
+}
+
+/** Probe thumbnails + hover preview GIF (15–25% slice) with IndexedDB cache. */
 export async function processVideosBatch(
   files,
   { concurrency = 4, onProgress, previewStartPct = 15, previewEndPct = 25 } = {},
@@ -18,17 +34,27 @@ export async function processVideosBatch(
       const relativePath = file.webkitRelativePath || file.name;
 
       let thumbnail = await getCachedThumbnail(id).catch(() => null);
+      let previewGifUrl = await getCachedPreviewGif(id).catch(() => null);
       let meta = await getCachedPreviewMeta(id).catch(() => null);
 
-      if (!meta) {
+      if (metaNeedsRefresh(meta, previewStartPct, previewEndPct)) {
         const probed = await probeVideo(file, { previewStartPct, previewEndPct, thumbPct: previewStartPct });
         meta = {
           duration: probed.duration,
           previewStart: probed.previewStart,
           previewEnd: probed.previewEnd,
-          previewPlayable: probed.previewPlayable,
+          previewStartPct,
+          previewEndPct,
+          hasPreviewGif: probed.hasPreviewGif,
         };
         await cachePreviewMeta(id, meta).catch(() => {});
+
+        if (probed.previewGifBlob) {
+          await cachePreviewGif(id, probed.previewGifBlob).catch(() => {});
+          if (previewGifUrl) URL.revokeObjectURL(previewGifUrl);
+          previewGifUrl = URL.createObjectURL(probed.previewGifBlob);
+        }
+
         if (!thumbnail && probed.thumbnail) {
           thumbnail = probed.thumbnail;
           await cacheThumbnail(id, probed.thumbnail).catch(() => {});
@@ -38,6 +64,10 @@ export async function processVideosBatch(
         if (probed.thumbnail) {
           thumbnail = probed.thumbnail;
           await cacheThumbnail(id, probed.thumbnail).catch(() => {});
+        }
+        if (!previewGifUrl && probed.previewGifBlob) {
+          await cachePreviewGif(id, probed.previewGifBlob).catch(() => {});
+          previewGifUrl = URL.createObjectURL(probed.previewGifBlob);
         }
       }
 
@@ -49,10 +79,11 @@ export async function processVideosBatch(
         size: file.size,
         createdAt: file.lastModified,
         thumbnail,
+        previewGifUrl,
         duration: meta?.duration ?? 0,
         previewStart: meta?.previewStart ?? 0,
         previewEnd: meta?.previewEnd ?? 0,
-        previewPlayable: meta?.previewPlayable ?? false,
+        hasPreviewGif: meta?.hasPreviewGif ?? !!previewGifUrl,
       };
       completed += 1;
       onProgress?.(Math.round((completed / files.length) * 100), completed, files.length);

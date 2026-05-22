@@ -17,6 +17,17 @@ export async function cachePreviewMeta(videoId, meta) {
   await idbSet('previewMeta', videoId, meta);
 }
 
+export async function getCachedPreviewGif(videoId) {
+  const blob = await idbGet('previewGifs', videoId);
+  if (!blob) return null;
+  return URL.createObjectURL(blob);
+}
+
+export async function cachePreviewGif(videoId, blob) {
+  if (!blob) return;
+  await idbSet('previewGifs', videoId, blob);
+}
+
 export async function cacheThumbnail(videoId, dataUrl) {
   if (!dataUrl?.startsWith('data:')) return;
   const res = await fetch(dataUrl);

@@ -105,7 +105,7 @@ const SidebarControls = ({
             onChange={(e) => setPreviewEndPct(Number(e.target.value))}
           />
         </div>
-        <p className="control-hint">Applied on next folder scan. Hover plays this slice.</p>
+        <p className="control-hint">Applied on next folder scan. Hover shows a GIF from this slice.</p>
       </div>
 
       <div className="control-group shuffle-panel">

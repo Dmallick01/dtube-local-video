@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef } from 'react';
 
 const VideoCard = ({
   video,
@@ -9,70 +9,26 @@ const VideoCard = ({
   onAddQueue,
 }) => {
   const [isHovered, setIsHovered] = useState(false);
-  const videoRef = useRef(null);
   const timeoutRef = useRef(null);
-  const [previewUrl, setPreviewUrl] = useState('');
 
-  const canPreview =
-    video.previewPlayable &&
-    video.duration > 0 &&
-    video.previewEnd > video.previewStart;
+  const canPreview = !!video.previewGifUrl;
 
   const formatPreviewLabel = () => {
-    if (!video.duration) return '';
+    if (!video.duration) return 'GIF';
     const s = ((video.previewStart / video.duration) * 100).toFixed(0);
     const e = ((video.previewEnd / video.duration) * 100).toFixed(0);
     return `${s}–${e}%`;
   };
 
-  const handleTimeUpdate = useCallback(() => {
-    const el = videoRef.current;
-    if (!el || !canPreview) return;
-    if (el.currentTime >= video.previewEnd - 0.05) {
-      el.currentTime = video.previewStart;
-    }
-  }, [canPreview, video.previewStart, video.previewEnd]);
-
-  const startPreview = async () => {
-    if (!canPreview) return;
-    if (!previewUrl) setPreviewUrl(URL.createObjectURL(video.file));
-    setIsHovered(true);
-    const el = videoRef.current;
-    if (!el) return;
-    const onReady = () => {
-      el.currentTime = video.previewStart;
-      el.play().catch(() => {});
-    };
-    if (el.readyState >= 1) onReady();
-    else el.addEventListener('loadedmetadata', onReady, { once: true });
-  };
-
   const handleMouseEnter = () => {
     if (!canPreview) return;
-    timeoutRef.current = setTimeout(startPreview, 350);
+    timeoutRef.current = setTimeout(() => setIsHovered(true), 200);
   };
 
   const handleMouseLeave = () => {
     clearTimeout(timeoutRef.current);
     setIsHovered(false);
-    const el = videoRef.current;
-    if (el) {
-      el.pause();
-      el.removeEventListener('timeupdate', handleTimeUpdate);
-    }
   };
-
-  useEffect(() => {
-    const el = videoRef.current;
-    if (isHovered && el) {
-      el.addEventListener('timeupdate', handleTimeUpdate);
-      return () => el.removeEventListener('timeupdate', handleTimeUpdate);
-    }
-  }, [isHovered, handleTimeUpdate]);
-
-  useEffect(() => () => {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-  }, [previewUrl]);
 
   return (
     <div
@@ -81,12 +37,13 @@ const VideoCard = ({
       onMouseLeave={handleMouseLeave}
       onClick={onClick}
     >
-      <div className={`thumbnail-container ${!video.thumbnail && !isHovered ? 'skeleton-pulse' : ''}`}>
-        {!isHovered && video.thumbnail && <img src={video.thumbnail} alt="" />}
-        {isHovered && previewUrl && (
-          <video ref={videoRef} src={previewUrl} muted playsInline className="hover-preview-video" />
+      <div className={`thumbnail-container ${!video.thumbnail && !canPreview ? 'skeleton-pulse' : ''}`}>
+        {isHovered && canPreview ? (
+          <img src={video.previewGifUrl} alt="" className="hover-preview-gif" />
+        ) : (
+          video.thumbnail && <img src={video.thumbnail} alt="" />
         )}
-        {!isHovered && !video.thumbnail && !canPreview && (
+        {!canPreview && !video.thumbnail && (
           <span className="preview-badge">no preview</span>
         )}
         {canPreview && (

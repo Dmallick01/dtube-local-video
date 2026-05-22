@@ -451,7 +451,7 @@ a { color: var(--chover); }
   color: var(--cdisabled);
 }
 
-.hover-preview-video {
+.hover-preview-gif {
   position: absolute;
   inset: 0;
   width: 100%;
