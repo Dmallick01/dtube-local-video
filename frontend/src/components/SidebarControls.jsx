@@ -10,14 +10,17 @@ const SidebarControls = ({
   setSearchQuery,
   gridCols,
   setGridCols,
+  folderHistory,
+  onReopenFolder,
 }) => {
   return (
     <div className="sidebar-controls">
       <div className="control-group">
-        <label>Search</label>
+        <label htmlFor="search-input">Search path (fuzzy)</label>
         <input
+          id="search-input"
           type="search"
-          placeholder="Filter by filename…"
+          placeholder="Match filename or folder path…"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="control-input"
@@ -25,8 +28,9 @@ const SidebarControls = ({
       </div>
 
       <div className="control-group">
-        <label>Sort by</label>
+        <label htmlFor="sort-select">Sort by</label>
         <select
+          id="sort-select"
           value={sortOption}
           onChange={(e) => setSortOption(e.target.value)}
           className="control-select"
@@ -41,8 +45,9 @@ const SidebarControls = ({
       </div>
 
       <div className="control-group">
-        <label>File type</label>
+        <label htmlFor="ext-select">File type</label>
         <select
+          id="ext-select"
           value={filterExt}
           onChange={(e) => setFilterExt(e.target.value)}
           className="control-select"
@@ -57,8 +62,9 @@ const SidebarControls = ({
       </div>
 
       <div className="control-group">
-        <label>Grid density</label>
+        <label htmlFor="grid-select">Grid density</label>
         <select
+          id="grid-select"
           value={gridCols}
           onChange={(e) => setGridCols(e.target.value)}
           className="control-select"
@@ -68,6 +74,24 @@ const SidebarControls = ({
           <option value="wide">Wide cards</option>
         </select>
       </div>
+
+      {folderHistory?.length > 0 && (
+        <div className="control-group">
+          <label>Recent libraries</label>
+          <ul className="history-list">
+            {folderHistory.map((h) => (
+              <li key={`${h.name}-${h.at}`}>
+                <button type="button" className="btn" onClick={() => onReopenFolder()}>
+                  {h.name} ({h.count} files)
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p style={{ fontSize: 10, color: 'var(--cdisabled)', marginTop: 6 }}>
+            Re-open uses folder picker (browser security).
+          </p>
+        </div>
+      )}
     </div>
   );
 };

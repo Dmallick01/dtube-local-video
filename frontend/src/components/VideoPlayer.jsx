@@ -1,14 +1,27 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { getWatchProgress, setWatchProgress } from '../lib/storage';
 
-const VideoPlayer = ({ video, onClose, onNext, onPrev, hasNext, hasPrev }) => {
+const SPEED_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+const VideoPlayer = ({
+  video,
+  subtitleUrl,
+  onClose,
+  onNext,
+  onPrev,
+  hasNext,
+  hasPrev,
+  onShowShortcuts,
+}) => {
   const videoRef = useRef(null);
   const wrapperRef = useRef(null);
+  const saveTimer = useRef(null);
 
   const [speed, setSpeed] = useState(1);
   const [volume, setVolume] = useState(1);
-  const [zoom, setZoom] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [videoUrl, setVideoUrl] = useState('');
+  const [pipActive, setPipActive] = useState(false);
 
   useEffect(() => {
     const url = URL.createObjectURL(video.file);
@@ -16,19 +29,36 @@ const VideoPlayer = ({ video, onClose, onNext, onPrev, hasNext, hasPrev }) => {
     return () => URL.revokeObjectURL(url);
   }, [video]);
 
+  const saveProgress = useCallback(() => {
+    const el = videoRef.current;
+    if (!el || !video.id) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      setWatchProgress(video.id, el.currentTime);
+    }, 800);
+  }, [video.id]);
+
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    getWatchProgress(video.id).then((t) => {
+      if (t > 5 && el.duration && t < el.duration - 10) {
+        el.currentTime = t;
+      }
+    });
+  }, [video.id, videoUrl]);
+
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.target.tagName === 'INPUT') return;
       switch (e.key) {
         case 'Escape':
-          if (!document.fullscreenElement) onClose();
+          if (!document.fullscreenElement && !document.pictureInPictureElement) onClose();
           break;
         case ' ':
           e.preventDefault();
-          if (videoRef.current) {
-            if (videoRef.current.paused) videoRef.current.play();
-            else videoRef.current.pause();
-          }
+          if (videoRef.current?.paused) videoRef.current.play();
+          else videoRef.current?.pause();
           break;
         case 'ArrowRight':
           if (e.shiftKey && hasNext) onNext?.();
@@ -42,6 +72,10 @@ const VideoPlayer = ({ video, onClose, onNext, onPrev, hasNext, hasPrev }) => {
         case 'F':
           toggleFullscreen();
           break;
+        case 'i':
+        case 'I':
+          togglePiP();
+          break;
         case 'n':
         case 'N':
           if (hasNext) onNext?.();
@@ -50,18 +84,28 @@ const VideoPlayer = ({ video, onClose, onNext, onPrev, hasNext, hasPrev }) => {
         case 'P':
           if (hasPrev) onPrev?.();
           break;
+        case '?':
+          onShowShortcuts?.();
+          break;
         default:
           break;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, onNext, onPrev, hasNext, hasPrev]);
+  }, [onClose, onNext, onPrev, hasNext, hasPrev, onShowShortcuts]);
 
   useEffect(() => {
-    const handleFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
+    const onPip = () => setPipActive(!!document.pictureInPictureElement);
+    document.addEventListener('fullscreenchange', onFs);
+    document.addEventListener('enterpictureinpicture', onPip);
+    document.addEventListener('leavepictureinpicture', onPip);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFs);
+      document.removeEventListener('enterpictureinpicture', onPip);
+      document.removeEventListener('leavepictureinpicture', onPip);
+    };
   }, []);
 
   const toggleFullscreen = () => {
@@ -72,34 +116,40 @@ const VideoPlayer = ({ video, onClose, onNext, onPrev, hasNext, hasPrev }) => {
     }
   };
 
-  const handleSpeedChange = (delta) => {
-    let newSpeed = Math.min(4, Math.max(0.25, speed + delta));
-    setSpeed(newSpeed);
-    if (videoRef.current) videoRef.current.playbackRate = newSpeed;
+  const togglePiP = async () => {
+    const el = videoRef.current;
+    if (!el) return;
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else if (document.pictureInPictureEnabled) {
+        await el.requestPictureInPicture();
+      }
+    } catch (err) {
+      console.warn('PiP unavailable', err);
+    }
   };
 
-  const handleVolumeChange = (delta) => {
-    let newVol = Math.min(1, Math.max(0, volume + delta));
-    setVolume(newVol);
-    if (videoRef.current) videoRef.current.volume = newVol;
-  };
-
-  const handleZoomChange = (delta) => {
-    setZoom((z) => Math.min(5, Math.max(0.5, z + delta)));
+  const applySpeed = (rate) => {
+    setSpeed(rate);
+    if (videoRef.current) videoRef.current.playbackRate = rate;
   };
 
   return (
     <div className="player-overlay">
-      {!isFullscreen && (
-        <button type="button" className="player-back" onClick={onClose}>
+      <div className="player-topbar">
+        <button type="button" className="btn" onClick={onClose}>
           ← Gallery
         </button>
-      )}
+        <span style={{ flex: 1, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {video.name}
+        </span>
+        <button type="button" className="btn" onClick={onShowShortcuts}>
+          ?
+        </button>
+      </div>
 
-      <div
-        ref={wrapperRef}
-        className={`player-shell ${isFullscreen ? 'fullscreen' : ''}`}
-      >
+      <div ref={wrapperRef} className={`player-shell ${isFullscreen ? 'fullscreen' : ''}`}>
         <div className="player-video-wrap">
           {videoUrl && (
             <video
@@ -108,8 +158,10 @@ const VideoPlayer = ({ video, onClose, onNext, onPrev, hasNext, hasPrev }) => {
               controls
               autoPlay
               className="player-video"
-              style={{ transform: `scale(${zoom})` }}
-            />
+              onTimeUpdate={saveProgress}
+            >
+              {subtitleUrl && <track kind="subtitles" src={subtitleUrl} default />}
+            </video>
           )}
         </div>
 
@@ -118,33 +170,53 @@ const VideoPlayer = ({ video, onClose, onNext, onPrev, hasNext, hasPrev }) => {
             <div className="player-meta">
               <h2>{video.name}</h2>
               <p>
-                {(video.size / (1024 * 1024)).toFixed(2)} MB · Space play/pause · ←/→ seek ·
-                Shift+←/→ prev/next · F fullscreen
+                Space · ←/→ seek · Shift+←/→ queue · N/P · F fullscreen · I PiP
+                {pipActive ? ' · PiP on' : ''}
+                {subtitleUrl ? ' · subtitles' : ''}
               </p>
             </div>
-            <div className="player-controls">
-              <button type="button" disabled={!hasPrev} onClick={onPrev} className="player-btn">
+            <div className="player-controls" style={{ flexWrap: 'wrap', gap: 8 }}>
+              <button type="button" disabled={!hasPrev} onClick={onPrev} className="player-group">
                 ⏮
               </button>
-              <button type="button" disabled={!hasNext} onClick={onNext} className="player-btn">
+              <button type="button" disabled={!hasNext} onClick={onNext} className="player-group">
                 ⏭
               </button>
-              <div className="player-group">
-                <span>Zoom {zoom.toFixed(1)}×</span>
-                <button type="button" onClick={() => handleZoomChange(-0.2)}>−</button>
-                <button type="button" onClick={() => handleZoomChange(0.2)}>+</button>
-              </div>
-              <div className="player-group">
-                <span>{speed.toFixed(2)}×</span>
-                <button type="button" onClick={() => handleSpeedChange(-0.25)}>−</button>
-                <button type="button" onClick={() => handleSpeedChange(0.25)}>+</button>
+              <div className="speed-chips">
+                {SPEED_PRESETS.map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    className={speed === r ? 'active' : ''}
+                    onClick={() => applySpeed(r)}
+                  >
+                    {r}×
+                  </button>
+                ))}
               </div>
               <div className="player-group">
                 <span>{Math.round(volume * 100)}%</span>
-                <button type="button" onClick={() => handleVolumeChange(-0.1)}>−</button>
-                <button type="button" onClick={() => handleVolumeChange(0.1)}>+</button>
+                <button type="button" onClick={() => {
+                  const v = Math.min(1, volume + 0.1);
+                  setVolume(v);
+                  if (videoRef.current) videoRef.current.volume = v;
+                }}
+                >
+                  +
+                </button>
+                <button type="button" onClick={() => {
+                  const v = Math.max(0, volume - 0.1);
+                  setVolume(v);
+                  if (videoRef.current) videoRef.current.volume = v;
+                }}
+                >
+                  −
+                </button>
               </div>
-              <button type="button" className="player-btn-accent" onClick={toggleFullscreen}>
+              <button type="button" className="btn" onClick={togglePiP}>
+                PiP
+              </button>
+              <button type="button" className="btn" onClick={toggleFullscreen}>
                 Fullscreen
               </button>
             </div>

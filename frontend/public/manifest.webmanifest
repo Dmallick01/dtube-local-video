@@ -1,0 +1,17 @@
+{
+  "name": "DTube Local Video",
+  "short_name": "DTube",
+  "description": "Offline local video library — scan folders, playlists, resume playback.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#0000ff",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
