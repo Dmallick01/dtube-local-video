@@ -1,5 +1,5 @@
 const DB_NAME = 'dtube-local';
-const DB_VERSION = 3;
+const DB_VERSION = 5;
 
 let dbPromise = null;
 
@@ -22,6 +22,21 @@ export function openDb() {
       }
       if (!db.objectStoreNames.contains('previewGifs')) {
         db.createObjectStore('previewGifs');
+      }
+      if (!db.objectStoreNames.contains('transcripts')) {
+        db.createObjectStore('transcripts');
+      }
+      if (!db.objectStoreNames.contains('silenceRanges')) {
+        db.createObjectStore('silenceRanges');
+      }
+      if (!db.objectStoreNames.contains('notes')) {
+        db.createObjectStore('notes');
+      }
+      if (!db.objectStoreNames.contains('summaries')) {
+        db.createObjectStore('summaries');
+      }
+      if (!db.objectStoreNames.contains('quizzes')) {
+        db.createObjectStore('quizzes');
       }
     };
   });

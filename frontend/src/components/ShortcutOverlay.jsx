@@ -12,6 +12,9 @@ const PLAYER = [
   ['N / P', 'Next / previous'],
   ['F', 'Fullscreen'],
   ['I', 'Picture-in-picture'],
+  ['S', 'Toggle skip-silence'],
+  ['[ / ]', 'Mark loop point A / B'],
+  ['L', 'Toggle A↔B loop'],
   ['0.5–2 chips', 'Playback speed'],
   ['Esc', 'Close player'],
 ];

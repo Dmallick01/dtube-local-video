@@ -34,11 +34,14 @@ const SidebarControls = ({
         <input
           id="search-input"
           type="search"
-          placeholder="Match filename or folder path…"
+          placeholder="Match filename, folder path, or generated captions…"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="control-input"
         />
+        <p style={{ color: 'var(--cdisabled)', fontSize: 11, marginTop: 4 }}>
+          Also matches spoken content for videos with generated/cached captions.
+        </p>
       </div>
 
       <div className="control-group">

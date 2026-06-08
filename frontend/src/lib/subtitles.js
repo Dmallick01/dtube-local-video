@@ -52,6 +52,16 @@ export async function loadSubtitleUrl(file) {
   return URL.createObjectURL(blob);
 }
 
+/** Build a subtitle blob URL straight from { start, end, text } cues (e.g. generated transcripts). */
+export function cuesToVttUrl(cues) {
+  let out = 'WEBVTT\n\n';
+  cues.forEach((c, i) => {
+    out += `${i + 1}\n${formatTime(c.start)} --> ${formatTime(c.end)}\n${c.text}\n\n`;
+  });
+  const blob = new Blob([out], { type: 'text/vtt' });
+  return URL.createObjectURL(blob);
+}
+
 function toVtt(text, format) {
   if (format === 'vtt' && text.trimStart().startsWith('WEBVTT')) return text;
   const cues = format === 'srt' ? parseSrt(text) : parseVtt(text);

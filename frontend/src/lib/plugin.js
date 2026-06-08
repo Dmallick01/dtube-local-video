@@ -1,3 +1,6 @@
+import { TRANSCRIPTION_MODELS } from './transcription';
+import { getCaptionModel, setCaptionModel } from './storage';
+
 const filters = [];
 
 /**
@@ -24,4 +27,11 @@ export function initDTubeGlobal() {
   window.DTube = window.DTube || {};
   window.DTube.registerFilter = registerFilter;
   window.DTube.version = '1.0.0';
+  window.DTube.captions = {
+    /** Whisper model ids available for in-browser transcription, keyed by size */
+    models: TRANSCRIPTION_MODELS,
+    /** Currently selected model size ('tiny' | 'base'), persisted in localStorage */
+    getModel: getCaptionModel,
+    setModel: setCaptionModel,
+  };
 }

@@ -8,7 +8,7 @@ import AppToolbar from './components/AppToolbar';
 import PlaylistPanel from './components/PlaylistPanel';
 import ShortcutOverlay from './components/ShortcutOverlay';
 import GalleryContent from './components/GalleryContent';
-import { fuzzyFilter } from './lib/fuzzy';
+import { fuzzyFilterWithTranscripts } from './lib/fuzzy';
 import { groupVideos } from './lib/groupVideos';
 import { sortVideos, orderByIds } from './lib/sortVideos';
 import { shuffleWithAlgorithm } from './lib/shuffleAlgorithms';
@@ -61,6 +61,9 @@ function App() {
   const [queue, setQueue] = useState([]);
   const [progressMap, setProgressMap] = useState({});
   const [subtitleUrl, setSubtitleUrl] = useState('');
+  // videoId -> joined transcript text, populated as the player loads/generates captions
+  // (lets the search box surface "videos that mention X" by spoken content too)
+  const [transcriptIndex, setTranscriptIndex] = useState({});
 
   const [currentVideo, setCurrentVideo] = useState(null);
   const [currentIndex, setCurrentIndex] = useState(-1);
@@ -218,9 +221,19 @@ function App() {
     if (filterExt !== 'all') {
       result = result.filter((v) => v.name.toLowerCase().endsWith(filterExt));
     }
-    result = fuzzyFilter(result, searchQuery, (v) => v.relativePath || v.name);
+    result = fuzzyFilterWithTranscripts(
+      result,
+      searchQuery,
+      (v) => v.relativePath || v.name,
+      (v) => transcriptIndex[v.id],
+    );
     return applyPluginFilters(result);
-  }, [videos, filterExt, searchQuery, favoritesOnly, favorites]);
+  }, [videos, filterExt, searchQuery, favoritesOnly, favorites, transcriptIndex]);
+
+  const handleTranscriptReady = useCallback((videoId, cues) => {
+    if (!videoId || !cues?.length) return;
+    setTranscriptIndex((idx) => (idx[videoId] ? idx : { ...idx, [videoId]: cues.map((c) => c.text).join(' ') }));
+  }, []);
 
   const displayVideos = useMemo(() => {
     if (customOrder?.length) {
@@ -458,6 +471,7 @@ function App() {
         <VideoPlayer
           video={currentVideo}
           subtitleUrl={subtitleUrl}
+          onTranscriptReady={handleTranscriptReady}
           hasNext={currentIndex < playOrder.length - 1}
           hasPrev={currentIndex > 0}
           onNext={() => playAdjacent(1)}

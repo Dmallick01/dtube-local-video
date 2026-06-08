@@ -29,3 +29,24 @@ export function fuzzyFilter(items, query, pathFn) {
     .sort((a, b) => b.score - a.score)
     .map((x) => x.item);
 }
+
+/**
+ * Fuzzy-filter by path/name first (ranked, as fuzzyFilter does), then append any
+ * remaining items whose transcript text contains the query verbatim — surfaces
+ * "videos that mention X" even when X never appears in the filename.
+ * `transcriptFn` returns the cached transcript text for an item, or falsy if none.
+ */
+export function fuzzyFilterWithTranscripts(items, query, pathFn, transcriptFn) {
+  const q = query.trim();
+  if (!q) return items;
+  const byPath = fuzzyFilter(items, q, pathFn);
+  if (!transcriptFn) return byPath;
+  const matched = new Set(byPath);
+  const lowerQ = q.toLowerCase();
+  const byTranscript = items.filter((item) => {
+    if (matched.has(item)) return false;
+    const text = transcriptFn(item);
+    return text ? text.toLowerCase().includes(lowerQ) : false;
+  });
+  return byTranscript.length ? [...byPath, ...byTranscript] : byPath;
+}
